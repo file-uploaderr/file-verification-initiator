@@ -1,0 +1,47 @@
+// curl {{schema_registry_url}}/subjects/file_uploader.upload_config.blob_upload_attempts-value/versions/2 |jq -r .schema
+
+syntax = "proto3";
+package file_uploader.upload_config.blob_upload_attempts;
+
+option go_package = ".;uploadstatepb";
+
+message Envelope {
+  Value before = 1;
+  Value after = 2;
+  Source source = 3;
+  block transaction = 4;
+  string op = 5;
+  int64 ts_ms = 6;
+  int64 ts_us = 7;
+  int64 ts_ns = 8;
+
+  message Value {
+    int64 id = 1;
+    string upload_type = 2;
+    string storage_key = 3;
+    string upload_state = 4;
+  }
+  message Source {
+    string version = 1;
+    string connector = 2;
+    string name = 3;
+    int64 ts_ms = 4;
+    string snapshot = 5;
+    string db = 6;
+    string sequence = 7;
+    int64 ts_us = 8;
+    int64 ts_ns = 9;
+    string schema = 10;
+    string table = 11;
+    int64 txId = 12;
+    int64 lsn = 13;
+    int64 xmin = 14;
+    string origin = 15;
+    int64 origin_lsn = 16;
+  }
+  message block {
+    string id = 1;
+    int64 total_order = 2;
+    int64 data_collection_order = 3;
+  }
+}
