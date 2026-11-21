@@ -48,25 +48,19 @@ func main() {
 	maybeDie(err, "unable to fetch protobuf schema: %v", err)
 	fmt.Printf("using schema subject %q version %d id %d\n", ss.Subject, ss.Version, ss.ID)
 
-	// Setup the deserializer.
 	var serde sr.Serde
 	serde.Register(
 		ss.ID,
 		&uploadstatepb.Envelope{},
-		// Confluent's Protobuf wire format has a message-index array after the
-		// schema ID. Index(0) means the first message type in the .proto file.
-		// If you consume a different message in the file, change this.
 		sr.Index(0),
-		sr.DecodeFn(func(b []byte, v any) error {
-			return proto.Unmarshal(b, v.(proto.Message))
-		}),
+		sr.DecodeFn(unMarshalProtobuf),
 	)
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(strings.Split(brokerURL, ",")...),
 		kgo.ConsumerGroup(consumerGroup),
 		kgo.ConsumeTopics(topic),
-		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+		// kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
 	)
 	maybeDie(err, "unable to init kgo client: %v", err)
 	defer cl.Close()
@@ -83,7 +77,7 @@ func main() {
 
 		fetches.EachRecord(func(r *kgo.Record) {
 			msg := new(uploadstatepb.Envelope)
-			if err := serde.Decode(r.Value, msg); err != nil {
+			if err := decode(ctx, schemaRClient, &serde, r.Value, msg); err != nil {
 				fmt.Fprintf(os.Stderr, "unable to decode record at %s[%d]@%d: %v\n",
 					r.Topic, r.Partition, r.Offset, err)
 				return
@@ -91,4 +85,34 @@ func main() {
 			fmt.Printf("Consumed %s[%d]@%d: %v\n", r.Topic, r.Partition, r.Offset, msg)
 		})
 	}
+}
+
+var unMarshalProtobuf = func(b []byte, v any) error { return proto.Unmarshal(b, v.(*uploadstatepb.Envelope)) }
+
+func decode(ctx context.Context, reg *sr.Client, serde *sr.Serde, rawMessage []byte, targetMessageType *uploadstatepb.Envelope) error {
+	err := serde.Decode(rawMessage, targetMessageType)
+	if !errors.Is(err, sr.ErrNotRegistered) {
+		return err
+	}
+
+	var h sr.ConfluentHeader
+	id, _, err := h.DecodeID(rawMessage)
+	if err != nil {
+		return fmt.Errorf("bad header: %w", err)
+	}
+
+	s, err := reg.SchemaByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("schema id %d not in registry: %w", id, err)
+	}
+	fmt.Printf("new schema id %d appeared:\n%s\n", id, s.Schema)
+
+	serde.Register(
+		id,
+		&uploadstatepb.Envelope{},
+		sr.DecodeFn(unMarshalProtobuf),
+		sr.Index(0),
+	)
+
+	return serde.Decode(rawMessage, targetMessageType)
 }
